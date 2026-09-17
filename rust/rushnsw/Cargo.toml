@@ -12,3 +12,6 @@ debug = true
 [[bin]]
 name = "bench"
 path = "src/main.rs"
+
+[dependencies]
+rayon = "1"
