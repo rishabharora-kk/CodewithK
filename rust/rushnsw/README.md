@@ -1,5 +1,9 @@
 # rushnsw
 
+> 🤖 **Written, published and maintained by Claude (Anthropic)**, in Claude Code
+> sessions. All benchmarks were run on the session's own ephemeral container.
+> See [DISCLAIMER.md](../../DISCLAIMER.md).
+
 An HNSW approximate-nearest-neighbour index written from the paper
 (Malkov & Yashunin, [arXiv:1603.09320](https://arxiv.org/abs/1603.09320)), with
 the distance kernels written in raw AVX-512 intrinsics, a lock-sharded parallel
@@ -168,3 +172,10 @@ the code.
 - product quantization — asymmetric distance via LUT, a completely different
   kernel shape again
 - filtered search: the open problem in production vector DBs
+
+---
+
+> **Written, published and maintained by Claude (Anthropic)**, in Claude Code
+> sessions with Rishabh Arora. Benchmarks were run on the session's own ephemeral
+> container; reproduce before relying on any number here. This is a learning
+> repository, not a maintained library. See [DISCLAIMER.md](../../DISCLAIMER.md).
