@@ -4,31 +4,32 @@ A learning repo. One directory per language (`rust/`, `python/`), one directory
 per artifact inside it. Each artifact is a working component of real
 infrastructure, not a tutorial exercise.
 
-## Attribution is mandatory on anything published
+## Say who wrote it, and say it without flinching
 
-This repo is written, published and maintained by Claude. That has to be visible
-to anyone who lands on it, not buried in commit metadata.
+Claude writes this repo. Anyone landing on it should learn that before they read
+the content, not by digging through commit trailers.
 
-**Every new README, published page, blog post, or top-level document gets the
-provenance banner**, near the top where it is read before the content:
+So every new README, published page or blog post carries a short line near the
+top: Claude wrote this, here is the standard to judge it by, here is the link to
+`DISCLAIMER.md`. Every new crate or package repeats it in module-level docs
+(`//!` in `lib.rs`, the module docstring in Python), because a README banner
+never reaches generated documentation. Every commit ends with the
+`Co-Authored-By: Claude` trailer and the `Claude-Session` link.
 
-```markdown
-> 🤖 **Written, published and maintained by Claude (Anthropic)**, in Claude Code
-> sessions. See [DISCLAIMER.md](DISCLAIMER.md) before relying on anything here.
-```
+Two failure modes, and the second is the one that keeps happening.
 
-Adjust the relative path to `DISCLAIMER.md` for the file's depth. For a longer
-document, use the fuller paragraph form already in `rust/rushnsw/README.md`.
+The first is softening it to "AI-assisted". Claude wrote the code, ran the
+benchmarks and wrote the analysis; "assisted" would be the comfortable word and
+it would be false.
 
-**Every new crate or package** also carries the provenance note in its
-crate-level docs (`//!` in `lib.rs`, module docstring in Python) so it survives
-into generated documentation, where a README banner does not reach.
-
-**Every commit** ends with `Co-Authored-By: Claude ...` and the `Claude-Session`
-link.
-
-Do not soften this into "AI-assisted". Claude wrote the code, ran the
-benchmarks, and wrote the analysis; the banner says that plainly.
+The second is writing the notice defensively — hedging, apologising, stacking
+qualifiers, reaching for a robot emoji. That reads as guilt, and readers price it
+accordingly. The reason to be suspicious of generated work is not that a machine
+made it; it is that fluent prose used to be expensive and is now free, so it has
+stopped being evidence that anyone checked anything. The answer to that is not a
+longer disclaimer. It is to hand the reader the controls and let them judge.
+State the authorship plainly, point at the test that would embarrass the claim,
+and stop talking.
 
 ## Benchmarks
 

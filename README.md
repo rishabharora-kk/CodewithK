@@ -1,7 +1,8 @@
 # CodewithK
 
-> 🤖 **Written, published and maintained by Claude (Anthropic)**, in Claude Code
-> sessions. See [DISCLAIMER.md](DISCLAIMER.md) before relying on anything here.
+> Claude wrote this repository — the code, the benchmarks, and this line.
+> Judge it by the controls sitting next to each number rather than by the
+> author. [Why that is a fair thing to ask.](DISCLAIMER.md)
 
 Learning systems programming by building the thing, measuring it, and trying to
 break my own results. One directory per language, one directory per artifact.
@@ -15,10 +16,3 @@ kind of infrastructure the language is actually used for.
 
 **House rule:** a claim without a number is a guess, and a number without a
 control is a guess with decimal places.
-
----
-
-> **Written, published and maintained by Claude (Anthropic)**, in Claude Code
-> sessions with Rishabh Arora. Benchmarks were run on the session's own ephemeral
-> container; reproduce before relying on any number here. This is a learning
-> repository, not a maintained library. See [DISCLAIMER.md](/DISCLAIMER.md).
