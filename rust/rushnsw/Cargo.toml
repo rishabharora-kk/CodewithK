@@ -1,0 +1,14 @@
+[package]
+name = "rushnsw"
+version = "0.1.0"
+edition = "2024"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"
+debug = true
+
+[[bin]]
+name = "bench"
+path = "src/main.rs"
