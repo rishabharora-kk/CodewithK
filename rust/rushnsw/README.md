@@ -8,15 +8,16 @@
 An HNSW approximate-nearest-neighbour index written from the paper
 (Malkov & Yashunin, [arXiv:1603.09320](https://arxiv.org/abs/1603.09320)), with
 the distance kernels written in raw AVX-512 intrinsics, a lock-sharded parallel
-builder, and int8 scalar quantization with exact rerank.
+builder, and int8 scalar quantization and product quantization, both with exact rerank.
 
 One dependency: `rayon`. Everything else — SIMD, quantization, the graph, the
 RNG, the benchmark harness — is in this crate.
 
 ```
-cargo test  --release          # 6 tests, incl. concurrency + kernel exactness
+cargo test  --release          # 9 tests: concurrency, kernel exactness, PQ fidelity
 cargo run   --release --bin bench   # round 1: kernel + recall/ef + intrinsic dim
 cargo run   --release --bin lab     # round 2: parallel build + int8
+cargo run   --release --bin pqlab   # round 3: product quantization, 2 corpus sizes
 ```
 
 ---
@@ -82,6 +83,61 @@ Quantization's isolated cost, measured on brute force with the graph removed
 entirely: recall@10 drops 0.9858 from 1.000. Everything below that in the table
 is the graph's fault, not the quantizer's.
 
+### Product quantization (32x compression)
+
+Chop each 256-d vector into 32 chunks of 8 dims, k-means each chunk to 256
+centroids, store one byte per chunk. 1024 bytes becomes 32.
+
+| | f32 | int8 | pq32 |
+|---|---:|---:|---:|
+| payload / vector | 1024 B | 256 B | **32 B** |
+| index total, n=200k | 231.5 MB | 77.9 MB | **33.1 MB** |
+| kernel, hot cache | 15.5 ns | 8.9 ns | 12.2 ns |
+
+The kernel is a different shape, and that is the part worth taking away. `l2sq`
+streams both vectors through the ALU. ADC does no arithmetic on the data at all:
+the distance from the query to all 256 centroids of each chunk is computed once
+into a 32x256 table, and every stored vector is then 32 table lookups and 32
+adds. No multiplies. The 32 bytes are *indices*, not values. The SIMD version is
+one `_mm512_i32gather_ps` per 16 subquantizers — 2.4x faster than scalar ADC
+(12.2 ns vs 28.7 ns), so the gather is earning its place.
+
+**And end to end it loses to int8 anyway.** At n=200k, ef=64: int8 with 4x rerank
+gets recall 0.954 at 7413 QPS; pq32 with 4x rerank gets 0.895 at 6530 QPS. Worse
+on both axes.
+
+That demanded an explanation better than "cache effects", so here is the
+falsifiable one. If search is bound by the distance kernel, end-to-end speedup
+should equal the kernel's ns/call ratio. If it is bound by memory traffic, pq32
+at 32 B/vector should pull away from int8 at 256 B/vector and beat that
+prediction.
+
+| at ef=64 | predicted from kernel alone | actual |
+|---|---:|---:|
+| int8 | 1.74x | **1.72x** |
+| pq32 | 1.27x | **1.51x** |
+
+int8 lands within 1% of its prediction: that path is purely kernel-bound, and
+its 4x smaller payload buys nothing at query time. pq32 beats its prediction by
+19%, which is the memory-traffic win showing up — real, measurable, and still
+not enough to cover a kernel that is 37% slower. Thirty-two scattered 4-byte
+gathers cost more than eight sequential 64-byte loads, and no amount of
+compression fixes that.
+
+So PQ's operating point is narrow but real: at ef=128 with 16x rerank it reaches
+recall 0.986 against f32's 0.985, at 1.54x the QPS and 7x less memory. Deep
+rerank, high ef, memory is the binding constraint. This is why FAISS pairs PQ
+with IVF rather than with a graph index — IVF scans contiguous lists, which is
+bandwidth-bound, which is the regime where 32 bytes per vector is the whole
+ballgame. Bolting PQ onto HNSW puts it in the one access pattern that defeats it.
+
+One measurement here is not solid and should not be quoted: the PQ kernel timed
+at 8.0 ns in one run and 12.2 ns in another, on the same binary and machine. The
+per-query table is 32 KB, which sits exactly on the L1D boundary, so whether it
+stays resident depends on what else is running. That instability is itself the
+finding, and it names the next move — production PQ quantizes the *table* to u8
+as well, which drops it to 8 KB and comfortably inside L1.
+
 ---
 
 ## What the Rust actually taught me
@@ -134,6 +190,7 @@ and `Rev(Cand)` flips it into a min-heap. This is everywhere in real Rust.
 ```
 src/dist.rs   f32 L2 kernels: scalar / AVX2+FMA / AVX-512, runtime dispatch
               resolved once into a fn pointer at construction
+src/pq.rs     product quantization: k-means codebooks, LUT build, gather ADC
 src/q8.rs     int8 quantization + VNNI integer kernel + exactness tests
 src/hnsw.rs   the graph: flat Vec<f32> corpus, flat Vec<u32> adjacency,
               epoch-stamped visited set, Alg.4 neighbour heuristic,

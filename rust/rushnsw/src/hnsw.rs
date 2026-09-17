@@ -8,6 +8,7 @@
 //!     bumping a counter, zero allocation per query.
 
 use crate::dist::{best_l2sq, DistFn};
+use crate::pq::{best_adc, AdcFn, Pq};
 use crate::q8::{best_l2sq_i8, DistI8, Q8};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -76,6 +77,7 @@ pub struct Hnsw {
     dist: DistFn,
     pub kernel: &'static str,
     q8: Option<(Q8, DistI8)>,
+    pq: Option<(Pq, AdcFn)>,
     rng: Rng,
 
     // query scratch, reused across calls
@@ -106,6 +108,7 @@ impl Hnsw {
             dist,
             kernel,
             q8: None,
+            pq: None,
             rng: Rng(seed | 1),
             visited: Vec::new(),
             epoch: 0,
@@ -328,7 +331,7 @@ impl Hnsw {
         Self {
             dim, m, m0: m * 2, ef_construction, ml: 1.0 / (m as f64).ln(),
             data, level0, deg0, upper, levels, entry, max_level, n,
-            dist, kernel, q8: None, rng: Rng(1),
+            dist, kernel, q8: None, pq: None, rng: Rng(1),
             visited: Vec::new(), epoch: 0, dist_calls: 0,
         }
     }
@@ -450,6 +453,93 @@ impl Hnsw {
         self.levels.iter().fold(1469598103934665603u64, |h, &l| {
             (h ^ l as u64).wrapping_mul(1099511628211)
         })
+    }
+
+    /// Train the product quantizer over the corpus and attach it.
+    /// `m` subquantizers => `m` bytes per vector (dim*4 / m compression).
+    pub fn train_pq(&mut self, m: usize, iters: usize, max_train: usize, seed: u64) {
+        let p = Pq::train(&self.data, self.dim, m, iters, max_train, seed);
+        let (f, _) = best_adc();
+        self.pq = Some((p, f));
+    }
+
+    pub fn pq_bytes(&self) -> usize { self.pq.as_ref().map(|(p, _)| p.bytes()).unwrap_or(0) }
+    pub fn pq_codebook_bytes(&self) -> usize {
+        self.pq.as_ref().map(|(p, _)| p.codebook_bytes()).unwrap_or(0)
+    }
+    pub fn pq_lut_bytes(&self) -> usize {
+        self.pq.as_ref().map(|(p, _)| p.lut_bytes()).unwrap_or(0)
+    }
+
+    /// Beam search where the distance is a table lookup.
+    ///
+    /// Note what is NOT here: no query vector in the inner loop, no corpus
+    /// vector, no multiply. `lut` was built once before the descent and every
+    /// node costs `m` gathers. The graph traversal is identical; only the
+    /// oracle changed.
+    fn search_layer_pq(&mut self, lut: &[f32], eps: &[u32], ef: usize, level: usize) -> Vec<Cand> {
+        let owned = self.pq.take().expect("train_pq() first");
+        let (pq, adc) = (&owned.0, owned.1);
+        self.epoch += 1;
+        let ep = self.epoch;
+        if self.visited.len() < self.n { self.visited.resize(self.n, 0); }
+
+        let mut cand: BinaryHeap<Rev> = BinaryHeap::with_capacity(ef * 2);
+        let mut res: BinaryHeap<Cand> = BinaryHeap::with_capacity(ef + 1);
+        for &e in eps {
+            if self.visited[e as usize] == ep { continue; }
+            self.visited[e as usize] = ep;
+            self.dist_calls += 1;
+            let d = adc(lut, pq.code(e), pq.ksub);
+            cand.push(Rev(Cand { d, id: e }));
+            res.push(Cand { d, id: e });
+        }
+        while res.len() > ef { res.pop(); }
+
+        let mut scratch: Vec<u32> = Vec::with_capacity(self.m0);
+        while let Some(Rev(c)) = cand.pop() {
+            let worst = res.peek().map(|x| x.d).unwrap_or(f32::INFINITY);
+            if c.d > worst && res.len() >= ef { break; }
+            scratch.clear();
+            scratch.extend_from_slice(self.nbrs(c.id, level));
+            for k in 0..scratch.len() {
+                let nb = scratch[k];
+                if self.visited[nb as usize] == ep { continue; }
+                self.visited[nb as usize] = ep;
+                let worst = res.peek().map(|x| x.d).unwrap_or(f32::INFINITY);
+                self.dist_calls += 1;
+                let d = adc(lut, pq.code(nb), pq.ksub);
+                if res.len() < ef || d < worst {
+                    cand.push(Rev(Cand { d, id: nb }));
+                    res.push(Cand { d, id: nb });
+                    if res.len() > ef { res.pop(); }
+                }
+            }
+        }
+        self.pq = Some(owned);
+        res.into_sorted_vec()
+    }
+
+    pub fn search_pq(&mut self, q: &[f32], k: usize, ef: usize, rerank: usize) -> Vec<(u32, f32)> {
+        if self.entry == NONE || self.pq.is_none() { return Vec::new(); }
+        let lut = self.pq.as_ref().unwrap().0.lut(q);
+        let mut ep = vec![self.entry];
+        for lev in (1..=self.max_level as usize).rev() {
+            let r = self.search_layer_pq(&lut, &ep, 1, lev);
+            ep = vec![r[0].id];
+        }
+        let shortlist = self.search_layer_pq(&lut, &ep, ef.max(k * rerank), 0);
+        if rerank <= 1 {
+            return shortlist.into_iter().take(k).map(|c| (c.id, c.d)).collect();
+        }
+        let mut out: Vec<(u32, f32)> = shortlist.into_iter().take(k * rerank)
+            .map(|c| {
+                let s = c.id as usize * self.dim;
+                (c.id, (self.dist)(q, &self.data[s..s + self.dim]))
+            }).collect();
+        out.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        out.truncate(k);
+        out
     }
 
     pub fn len(&self) -> usize { self.n }
